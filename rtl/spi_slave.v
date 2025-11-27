@@ -11,7 +11,7 @@ module spi_slave #(
     input  wire [DATA_WIDTH-1:0] tx_data,
     input  wire                  cpol,
     input  wire                  cpha,
-    
+
     output reg                   miso,
     output reg  [DATA_WIDTH-1:0] rx_data,
     output reg                   rx_valid
@@ -19,23 +19,19 @@ module spi_slave #(
 
     reg [DATA_WIDTH-1:0] tx_reg;
     reg [DATA_WIDTH-1:0] rx_reg;
-    reg [$clog2(DATA_WIDTH):0] bit_cnt;
+    reg [$clog2(DATA_WIDTH):0] bit_cnt; // bit_cnt is number of bit already sampled
 
     wire sample_clk_internal;
     wire shift_clk_internal;
 
-    // Mode logic:
     // Mode 0 (0,0): Sample Rising,  Shift Falling
     // Mode 1 (0,1): Shift Rising,   Sample Falling
     // Mode 2 (1,0): Sample Falling, Shift Rising
     // Mode 3 (1,1): Shift Falling,  Sample Rising
-    
+
     assign sample_clk_internal = (cpol == cpha) ? sclk : ~sclk;
     assign shift_clk_internal  = (cpol == cpha) ? ~sclk : sclk;
 
-    // -------------------------------------------------------------------------
-    // Async Load / Setup
-    // -------------------------------------------------------------------------
     always @(negedge cs_n or posedge rst) begin
         if (rst) begin
             bit_cnt <= 0;
@@ -46,20 +42,16 @@ module spi_slave #(
             bit_cnt <= 0;
             tx_reg  <= tx_data; // Load data to send
             rx_valid <= 0;
-            
-            // CPHA=0: Drive first bit immediately (before first clock edge)
+
             if (cpha == 0) begin
                 if (MSB_FIRST)
                     miso <= tx_data[DATA_WIDTH-1];
                 else
                     miso <= tx_data[0];
-            end 
+            end
         end
     end
-    
-    // -------------------------------------------------------------------------
-    // Sample MOSI
-    // -------------------------------------------------------------------------
+
     always @(posedge sample_clk_internal or posedge cs_n or posedge rst) begin
         if (rst) begin
             rx_reg <= 0;
@@ -71,22 +63,18 @@ module spi_slave #(
                     rx_reg <= {rx_reg[DATA_WIDTH-2:0], mosi};
                 else
                     rx_reg <= {mosi, rx_reg[DATA_WIDTH-1:1]};
-                
+
                 bit_cnt <= bit_cnt + 1;
             end
         end
     end
 
-    // -------------------------------------------------------------------------
-    // Shift MISO (FIXED LOGIC)
-    // -------------------------------------------------------------------------
     always @(posedge shift_clk_internal or posedge cs_n or posedge rst) begin
         if (rst) begin
             miso <= 1'bz;
         end else if (cs_n) begin
-            miso <= 1'bz; 
+            miso <= 1'bz;
         end else begin
-            // Unified Shift Logic:
             // In CPHA=0: This edge happens AFTER sample. bit_cnt is 1. We want Bit 6. (7-1=6)
             // In CPHA=1: This edge happens BEFORE sample. bit_cnt is 0. We want Bit 7. (7-0=7)
             if (bit_cnt < DATA_WIDTH) begin
@@ -98,9 +86,6 @@ module spi_slave #(
         end
     end
 
-    // -------------------------------------------------------------------------
-    // Data Valid
-    // -------------------------------------------------------------------------
     always @(posedge cs_n) begin
         if (!rst && bit_cnt == DATA_WIDTH) begin
             rx_data <= rx_reg;
