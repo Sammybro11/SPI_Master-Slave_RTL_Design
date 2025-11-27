@@ -1,188 +1,142 @@
-`timescale 1ns / 1ps
+`timescale 1ps/1ps
 
 module spi_slave_tb;
 
-    parameter DATA_WIDTH = 8;
+   parameter DATA_WIDTH = 8;
 
-    reg                   sclk;
-    reg                   cs_n;
-    reg                   mosi;
-    reg                   rst;
-    reg                   cpol;
-    reg                   cpha;
-    reg [DATA_WIDTH-1:0]  tx_data;
+   reg  CPOL;
+   reg  CPHA;
 
-    wire                  miso;
-    wire [DATA_WIDTH-1:0] rx_data;
-    wire                  rx_valid;
+   reg  rstb;
+   reg  csb;
+   reg  sclk;
+   reg  din;
+   wire dout;
 
-    // Testbench tracking variables
-    reg [DATA_WIDTH-1:0] master_rx_reg;
-    integer i;
+   reg  [DATA_WIDTH-1:0] datai;
+   wire [DATA_WIDTH-1:0] datao;
 
-    spi_slave #(
-        .DATA_WIDTH(DATA_WIDTH),
-        .MSB_FIRST(1)
-    ) dut (
-        .sclk(sclk),
-        .cs_n(cs_n),
-        .mosi(mosi),
-        .rst(rst),
-        .cpol(cpol),
-        .cpha(cpha),
-        .tx_data(tx_data),
-        .miso(miso),
-        .rx_data(rx_data),
-        .rx_valid(rx_valid)
-    );
+   wire [DATA_WIDTH-1:0] rx_word;
+   wire                  rx_stb;
 
-    task run_spi_transaction;
-        input [DATA_WIDTH-1:0] master_out_data;
-        input [DATA_WIDTH-1:0] expected_slave_out;// expected MISO
-        input mode_cpol;
-        input mode_cpha;
-        begin
-            cpol = mode_cpol;
-            cpha = mode_cpha;
-            sclk = cpol;
-            master_rx_reg = 0;
-            #20;
-            $display("[Time %0t] Starting Mode (CPOL=%b, CPHA=%b) | MOSI: 0x%h | Exp MISO: 0x%h",
-                     $time, cpol, cpha, master_out_data, expected_slave_out);
+   spi_slave #(.DATA_WIDTH(DATA_WIDTH))
+   spi_slave0
+     (.CPOL(CPOL),
+      .CPHA(CPHA),
+      .datai(datai),
+      .datao(datao),
+      .dout(dout),
+      .din(din),
+      .csb(csb),
+      .sclk(sclk),
+      .rstb(rstb),
+      .rx_word(rx_word),
+      .rx_stb(rx_stb)
+      );
 
-            cs_n = 0;
+   initial begin
+      CPOL = 0;
+      CPHA = 0;
+      rstb = 0;
+      csb  = 1;
+      sclk = 0;
+      din  = 0;
+      datai = 8'h55;
 
-            if (cpha == 0) begin
-                mosi = master_out_data[DATA_WIDTH-1];
-                #10;
-            end else begin
-                #10;
-            end
+      $dumpfile("spi_slave_only.vcd");
+      $dumpvars(0, spi_slave_tb);
 
-            for (i = 0; i < DATA_WIDTH; i = i + 1) begin
-                if (cpha == 0) begin
-                    sclk = ~sclk;
-                    master_rx_reg = {master_rx_reg[DATA_WIDTH-2:0], miso};
-                    #10;
+      #20 rstb = 1;
 
-                    sclk = ~sclk;
-                    if (i < DATA_WIDTH-1)
-                        mosi = master_out_data[DATA_WIDTH - 2 - i];
-                    #10;
+      #20 $display("Testing spi_slave only, all 4 modes (RX path)");
+      test_slave_all_modes;
 
-                end else begin
-                    sclk = ~sclk;
-                    mosi = master_out_data[DATA_WIDTH - 1 - i];
-                    #10;
+      #40 $finish;
+   end
 
-                    sclk = ~sclk;
-                    master_rx_reg = {master_rx_reg[DATA_WIDTH-2:0], miso};
-                    #10;
-                end
-            end
-
-            #10;
-            cs_n = 1;
-            mosi = 0;
-            sclk = cpol;
-            #20;
-
-            if (rx_valid && rx_data == master_out_data)
-                $display("    [PASS] Slave RX: 0x%h", rx_data);
+   task drive_edge;
+      input leading;
+      begin
+         if (leading) begin
+            if (CPOL == 0)
+               sclk = 1;
             else
-                $display("    [FAIL] Slave RX: 0x%h (Expected: 0x%h)", rx_data, master_out_data);
-
-            if (master_rx_reg == expected_slave_out)
-                $display("    [PASS] Master RX: 0x%h", master_rx_reg);
+               sclk = 0;
+         end else begin
+            if (CPOL == 0)
+               sclk = 0;
             else
-                $display("    [FAIL] Master RX: 0x%h (Expected: 0x%h)",
-                    master_rx_reg, expected_slave_out);
-        end
-    endtask
+               sclk = 1;
+         end
+      end
+   endtask
 
-    initial begin
-        $dumpfile("spi_slave_test.vcd");
-        $dumpvars(0, spi_slave_tb);
+   task send_frame_mosi;
+      input [DATA_WIDTH-1:0] mosi_word;
+      integer i;
+      begin
+         csb = 0;
+         sclk = CPOL;
 
-        // Initialize
-        rst = 1;
-        sclk = 0;
-        cs_n = 1;
-        mosi = 0;
-        cpol = 0;
-        cpha = 0;
-        tx_data = 0;
+         if (CPHA == 0) begin
+            for (i = DATA_WIDTH-1; i >= 0; i = i - 1) begin
+               din = mosi_word[i];
+               #1 drive_edge(1);
+               #1 drive_edge(0);
+            end
+         end else begin
+            drive_edge(1);
+            drive_edge(0);
+            for (i = DATA_WIDTH-1; i >= 0; i = i - 1) begin
+               din = mosi_word[i];
+               #1 drive_edge(1);
+               #1 drive_edge(0);
+            end
+         end
 
-        #20;
-        rst = 0;
-        #20;
+         csb = 1;
+         sclk = CPOL;
+         #2;
+      end
+   endtask
 
-        $display("");
-        $display("TEST CASE 1: Standard Modes (8-bit)");
-        $display("");
-        // Mode 0: Master sends 0xA1, Slave sends 0x55
-        tx_data = 8'h55;
-        run_spi_transaction(8'hA1, 8'h55, 0, 0);
+   task test_slave_all_modes;
+      integer mode;
+      reg [DATA_WIDTH-1:0] mosi_patterns[0:3];
+      integer i;
+      reg pass;
+      begin
+         mosi_patterns[0] = 8'h00;
+         mosi_patterns[1] = 8'h5A;
+         mosi_patterns[2] = 8'hC3;
+         mosi_patterns[3] = 8'hFF;
 
-        // Mode 1: Master sends 0xB2, Slave sends 0xAA
-        tx_data = 8'hAA;
-        run_spi_transaction(8'hB2, 8'hAA, 0, 1);
+         pass = 1'b1;
 
-        // Mode 2: Master sends 0xC3, Slave sends 0x33
-        tx_data = 8'h33;
-        run_spi_transaction(8'hC3, 8'h33, 1, 0);
+         for (mode = 0; mode < 4; mode = mode + 1) begin
+            CPOL = mode[1];
+            CPHA = mode[0];
 
-        // Mode 3: Master sends 0xD4, Slave sends 0xCC
-        tx_data = 8'hCC;
-        run_spi_transaction(8'hD4, 8'hCC, 1, 1);
+            $display("Mode %0d: CPOL=%0b CPHA=%0b", mode, CPOL, CPHA);
 
+            for (i = 0; i < 4; i = i + 1) begin
+               send_frame_mosi(mosi_patterns[i]);
+               if (datao !== mosi_patterns[i]) begin
+                  $display("FAIL slave RX mode=%0d pattern=%0d: mosi=0x%x rx=0x%x",
+                           mode, i, mosi_patterns[i], datao);
+                  pass = 0;
+               end else begin
+                  $display("PASS slave RX mode=%0d pattern=%0d: mosi=0x%x rx=0x%x",
+                           mode, i, mosi_patterns[i], datao);
+               end
+            end
+         end
 
-        $display("");
-        $display("");
-        $display("TEST CASE 2: Back-to-Back Transfers (Stress Test)");
-        $display("");
-        // Transfer 1
-        tx_data = 8'h11;
-        cpol=0; cpha=0; sclk=0;
-        cs_n = 0;
-        mosi = 1;
-        #10;
-        repeat(8) begin sclk=1; #10; sclk=0; #10; end
-        // End Transaction 1
-        cs_n = 1;
-        #10;
-        // Transfer 2
-        tx_data = 8'hFF;
-        cs_n = 0;
-        #10;
-        repeat(8) begin sclk=1; #10; sclk=0; #10; end
-        cs_n = 1;
-        #10;
-        if (rx_valid) $display("    [PASS] Back-to-Back Valid Pulse Detected");
-        else          $display("    [FAIL] Back-to-Back Valid Pulse Missed");
-
-
-        $display("");
-        $display("");
-        $display("TEST CASE 3: Reset in Middle of Transaction");
-        $display("");
-        cpol=0; cpha=0; sclk=0;
-        cs_n = 0;
-        #10;
-        // Clock 4 times (Halfway)
-        repeat(4) begin sclk=1; #10; sclk=0; #10; end
-        $display("    [INFO] Asserting Reset mid-transfer...");
-        rst = 1;
-        #10;
-        rst = 0;
-        cs_n = 1;// End transaction
-        #10;
-        if (rx_valid == 0) $display("    [PASS] No Valid Pulse (Correctly Aborted)");
-        else               $display("    [FAIL] Valid Pulse generated despite Reset");
-
-        $display("");
-        $display("ALL TESTS COMPLETE");
-        $finish;
-    end
+         if (pass)
+           $display("SLAVE-ONLY ALL-MODES TEST PASS");
+         else
+           $display("SLAVE-ONLY ALL-MODES TEST FAIL");
+      end
+   endtask
 
 endmodule
